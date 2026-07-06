@@ -6,6 +6,12 @@ import {
   Volume2, VolumeX, Palette, Settings,
 } from "lucide-react";
 
+import {
+  onAuthChange, loginGoogle, logoutUser,
+  saveProgressCloud, loadProgressCloud, CONFIGURED as FIREBASE_CONFIGURED,
+  createRoom, joinRoom, subscribeRoom, pushMove, finishRoom, abandonRoom,
+} from './firebase.js';
+
 // ============================================================================
 //  CATUR AKADEMI - Belajar catur dari nol, selangkah demi selangkah
 // ============================================================================
@@ -2000,6 +2006,42 @@ function GlobalStyles2() {
       .icon-btn { background: var(--bg-panel-2); border: 1px solid var(--border-soft); border-radius: 0.65rem; padding: 0.4rem; color: var(--text-primary); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.15s; }
       .icon-btn:active { background: var(--bg-panel); }
       .icon-btn:disabled { opacity: 0.35; cursor: default; }
+
+      /* ---------- Multiplayer & Login ---------- */
+      .room-code {
+        font-family: 'JetBrains Mono', monospace; font-size: 2.2rem; font-weight: 800;
+        letter-spacing: 0.25em; color: var(--accent-gold); text-align: center;
+        background: rgba(224,185,82,0.1); border: 2px dashed rgba(224,185,82,0.4);
+        border-radius: 1rem; padding: 0.8rem 1.2rem; margin: 0.6rem 0;
+      }
+      .player-bar {
+        display: flex; align-items: center; gap: 0.65rem; padding: 0.55rem 0.7rem;
+        background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: 0.9rem;
+      }
+      .player-avatar {
+        width: 2.2rem; height: 2.2rem; border-radius: 50%; flex-shrink: 0;
+        background: var(--bg-panel-2); display: flex; align-items: center; justify-content: center;
+        overflow: hidden; font-size: 1.1rem; border: 2px solid var(--border-soft);
+      }
+      .player-avatar img { width: 100%; height: 100%; object-fit: cover; }
+      .player-bar-active { border-color: var(--accent-gold); }
+      .player-bar-check { border-color: var(--error); animation: checkPulse 1.1s ease-in-out infinite; }
+      .user-pill {
+        display: flex; align-items: center; gap: 0.35rem; cursor: pointer; border: none;
+        background: var(--bg-panel-2); border-radius: 999px; padding: 0.28rem 0.65rem 0.28rem 0.28rem;
+        color: var(--text-primary); font-size: 0.75rem; font-weight: 600; transition: background 0.15s;
+      }
+      .user-pill:active { background: var(--bg-panel); }
+      .user-pill-avatar {
+        width: 1.6rem; height: 1.6rem; border-radius: 50%; overflow: hidden; flex-shrink: 0;
+        background: var(--bg-panel); display: flex; align-items: center; justify-content: center; font-size: 0.8rem;
+      }
+      .user-pill-avatar img { width: 100%; height: 100%; object-fit: cover; }
+      @keyframes dotBlink { 0%,80%,100%{opacity:0.2;} 40%{opacity:1;} }
+      .dot-blink span { display:inline-block; width:0.45rem; height:0.45rem; border-radius:50%;
+        background:var(--text-muted); margin:0 0.12rem; animation:dotBlink 1.4s infinite; }
+      .dot-blink span:nth-child(2){animation-delay:0.2s;}
+      .dot-blink span:nth-child(3){animation-delay:0.4s;}
     `}</style>
   );
 }
@@ -2007,19 +2049,38 @@ function GlobalStyles2() {
 // ============================================================================
 //  TOP BAR & BOTTOM NAV
 // ============================================================================
-function TopBar({ progress }) {
+function TopBar({ progress, user, onLogin, onLogout }) {
   return (
     <header className="top-bar">
       <div className="app-logo">
         <Castle size={22} style={{ color: 'var(--accent-gold)' }} />
         <span className="app-logo-text font-display">CaturKu</span>
       </div>
-      <div className="top-bar-pills">
+      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
         <span className="pill pill-gold"><Zap size={13} />{progress.xp}</span>
         <span className="pill pill-streak">
           <Flame size={13} className={progress.streak > 0 ? 'anim-flicker' : ''} />
           {progress.streak}
         </span>
+        {FIREBASE_CONFIGURED && (
+          user ? (
+            <button type="button" className="user-pill" onClick={onLogout} title="Logout">
+              <div className="user-pill-avatar">
+                {user.photoURL
+                  ? <img src={user.photoURL} alt={user.displayName} referrerPolicy="no-referrer" />
+                  : <span>👤</span>}
+              </div>
+              <span style={{ maxWidth: '4.5rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {user.displayName?.split(' ')[0] || 'Akun'}
+              </span>
+            </button>
+          ) : (
+            <button type="button" className="user-pill" onClick={onLogin} title="Login Google">
+              <div className="user-pill-avatar"><span>🔑</span></div>
+              <span>Login</span>
+            </button>
+          )
+        )}
       </div>
     </header>
   );
@@ -2967,6 +3028,440 @@ function AchievementToast({ achievement, onDone }) {
       </div>
     </div>
   );
+}
+
+// ============================================================================
+//  MAIN CHOICE SCREEN - pilih mode: Lawan AI atau Lawan Player
+// ============================================================================
+function MainChoiceScreen({ user, onChooseAI, onChooseMultiplayer }) {
+  return (
+    <div className="anim-slide-up" style={{ padding: '0 1rem' }}>
+      <div className="card center-col" style={{ marginBottom: '1rem', padding: '1.2rem' }}>
+        <Crown size={32} style={{ color: 'var(--accent-gold)', marginBottom: '0.4rem' }} />
+        <h2 className="section-title">Pilih Mode Main</h2>
+        <p className="muted" style={{ fontSize: '0.82rem', margin: '0.2rem 0 0', textAlign: 'center' }}>
+          Latihan lawan AI atau tantang teman secara real-time!
+        </p>
+      </div>
+
+      <button type="button" className="lesson-card" style={{ marginBottom: '0.6rem' }} onClick={onChooseAI}>
+        <div className="lesson-status-circle status-available">
+          <Bot size={18} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <p className="lesson-card-title">Lawan AI</p>
+          <p className="lesson-card-sub">4 tingkat kesulitan · Analisis setelah partai</p>
+        </div>
+        <ChevronRight size={18} style={{ color: 'var(--text-muted)' }} />
+      </button>
+
+      <button
+        type="button"
+        className="lesson-card"
+        style={{ borderColor: user ? undefined : 'var(--border-soft)', opacity: FIREBASE_CONFIGURED ? 1 : 0.45 }}
+        onClick={FIREBASE_CONFIGURED ? onChooseMultiplayer : undefined}
+        disabled={!FIREBASE_CONFIGURED}
+      >
+        <div className="lesson-status-circle" style={{ background: 'rgba(91,200,224,0.18)', color: '#5BC8E0' }}>
+          <User size={18} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <p className="lesson-card-title">Lawan Player</p>
+          <p className="lesson-card-sub">
+            {!FIREBASE_CONFIGURED
+              ? 'Perlu konfigurasi Firebase — lihat firebase.js'
+              : !user
+                ? 'Login Google dulu untuk main bareng teman'
+                : 'Real-time · Buat room atau gabung dengan kode'}
+          </p>
+        </div>
+        {FIREBASE_CONFIGURED && <ChevronRight size={18} style={{ color: 'var(--text-muted)' }} />}
+      </button>
+
+      {FIREBASE_CONFIGURED && !user && (
+        <p className="muted" style={{ textAlign: 'center', fontSize: '0.78rem', marginTop: '0.7rem' }}>
+          Ketuk tombol <b>Login</b> di pojok kanan atas untuk masuk dengan Google.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+//  MULTIPLAYER TAB - VS Player real-time via Firebase
+// ============================================================================
+function replayMoves(moves) {
+  let state = fenToState(REAL_START_FEN);
+  for (const m of moves) {
+    try {
+      const f = squareToRC(m.from), t = squareToRC(m.to);
+      const legal = getLegalMoves(state, f.row, f.col);
+      const mv = legal.find(lm =>
+        lm.to.row === t.row && lm.to.col === t.col &&
+        (!m.promotion || lm.promotion === m.promotion)
+      );
+      if (mv) state = applyMove(state, mv);
+    } catch (_) {}
+  }
+  return state;
+}
+
+function PlayerBar({ info, color, isMyTurn, inCheck }) {
+  const cls = ['player-bar', isMyTurn ? 'player-bar-active' : '', inCheck ? 'player-bar-check' : ''].filter(Boolean).join(' ');
+  return (
+    <div className={cls}>
+      <div className="player-avatar">
+        {info?.photo ? <img src={info.photo} alt={info.name} referrerPolicy="no-referrer" /> : <span>♟</span>}
+      </div>
+      <div style={{ flex: 1 }}>
+        <p style={{ margin: 0, fontWeight: 700, fontSize: '0.88rem' }}>{info?.name || 'Menunggu...'}</p>
+        <p style={{ margin: 0, fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+          {color === 'w' ? '♙ Putih' : '♟ Hitam'}
+        </p>
+      </div>
+      {isMyTurn && !inCheck && <span className="dot-blink"><span /><span /><span /></span>}
+      {inCheck && <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--error)' }}>SKAK!</span>}
+    </div>
+  );
+}
+
+function MultiplayerTab({ user, onBack }) {
+  const { boardTheme } = usePrefs();
+  const sound = useSound();
+
+  const [phase, setPhase] = useState('lobby'); // lobby|creating|waiting|joining|playing|ended
+  const [roomCode, setRoomCode] = useState('');
+  const [joinInput, setJoinInput] = useState('');
+  const [error, setError] = useState('');
+  const [roomData, setRoomData] = useState(null);
+  const [gameState, setGameState] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [legalTargets, setLegalTargets] = useState([]);
+  const [pendingPromotion, setPendingPromotion] = useState(null);
+  const [result, setResult] = useState(null);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const unsubRef = useRef(null);
+  const prevMovesLen = useRef(0);
+
+  // my color in this room
+  const myColor = roomData
+    ? (roomData.host?.uid === user?.uid ? roomData.hostColor : (roomData.hostColor === 'w' ? 'b' : 'w'))
+    : null;
+  const meIsHost = roomData?.host?.uid === user?.uid;
+  const opponent = meIsHost ? roomData?.guest : roomData?.host;
+
+  // Subscribe to room changes
+  useEffect(() => {
+    if (!roomCode || phase === 'lobby') return;
+    unsubRef.current = subscribeRoom(roomCode, (data) => {
+      setRoomData(data);
+
+      // Guest joined → start game
+      if (data.status === 'playing' && phase === 'waiting') {
+        setPhase('playing');
+        setGameState(replayMoves(data.moves || []));
+        prevMovesLen.current = (data.moves || []).length;
+      }
+
+      // Apply new moves from opponent
+      if (data.status === 'playing' && phase === 'playing') {
+        const moves = data.moves || [];
+        if (moves.length !== prevMovesLen.current) {
+          const newState = replayMoves(moves);
+          prevMovesLen.current = moves.length;
+          const lastM = moves[moves.length - 1];
+          const wasCapture = lastM?.capture;
+          sound(wasCapture ? 'capture' : 'move');
+          setTimeout(() => {
+            if (isCheckmate(newState)) sound(newState.turn === myColor ? 'checkmateLoss' : 'checkmateWin');
+            else if (isInCheck(newState, newState.turn)) sound('check');
+          }, 160);
+          setGameState(newState);
+          setSelected(null); setLegalTargets([]);
+        }
+      }
+
+      // Game ended
+      if (data.status === 'ended' && phase !== 'ended') {
+        setPhase('ended');
+        setResult(data.result);
+        if (data.result === myColor) sound('checkmateWin');
+        else if (data.result === 'draw') sound('draw');
+        else sound('checkmateLoss');
+      }
+    });
+    return () => { if (unsubRef.current) unsubRef.current(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomCode, phase]);
+
+  // End-game detection
+  useEffect(() => {
+    if (!gameState || phase !== 'playing') return;
+    if (isCheckmate(gameState)) {
+      const winner = gameState.turn === 'w' ? 'b' : 'w';
+      finishRoom(roomCode, winner);
+    } else if (isDraw(gameState)) {
+      finishRoom(roomCode, 'draw');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameState]);
+
+  function cleanup() {
+    if (unsubRef.current) { unsubRef.current(); unsubRef.current = null; }
+    setRoomCode(''); setRoomData(null); setGameState(null);
+    setSelected(null); setLegalTargets([]); setPendingPromotion(null);
+    setResult(null); prevMovesLen.current = 0; setError('');
+    setPhase('lobby');
+  }
+
+  async function handleCreate(color) {
+    setPhase('creating'); setError('');
+    try {
+      const code = await createRoom(user, color);
+      setRoomCode(code);
+      setPhase('waiting');
+    } catch (e) { setError(e.message); setPhase('lobby'); }
+  }
+
+  async function handleJoin() {
+    if (!joinInput.trim()) return;
+    setPhase('joining'); setError('');
+    try {
+      const data = await joinRoom(joinInput.trim(), user);
+      setRoomCode(joinInput.trim().toUpperCase());
+      setRoomData(data);
+      setPhase('playing');
+      setGameState(replayMoves(data.moves || []));
+      prevMovesLen.current = (data.moves || []).length;
+    } catch (e) { setError(e.message); setPhase('lobby'); }
+  }
+
+  async function doMove(move) {
+    if (!gameState || gameState.turn !== myColor) return;
+    const san = moveToSAN(gameState, move);
+    const next = applyMove(gameState, move);
+    sound(move.capture ? 'capture' : 'move');
+    setTimeout(() => {
+      if (isCheckmate(next)) sound(next.turn === myColor ? 'checkmateLoss' : 'checkmateWin');
+      else if (isInCheck(next, next.turn)) sound('check');
+    }, 160);
+    setGameState(next);
+    setSelected(null); setLegalTargets([]);
+    prevMovesLen.current += 1;
+    await pushMove(roomCode, {
+      from: rcToSquare(move.from.row, move.from.col),
+      to: rcToSquare(move.to.row, move.to.col),
+      promotion: move.promotion || null,
+      capture: move.capture || false,
+      san,
+    });
+  }
+
+  function handleSquareClick(r, c) {
+    if (!gameState || phase !== 'playing') return;
+    if (gameState.turn !== myColor) return;
+    if (pendingPromotion) return;
+    const piece = gameState.board[r][c];
+    if (selected) {
+      if (selected.row === r && selected.col === c) { setSelected(null); setLegalTargets([]); return; }
+      const isTarget = legalTargets.some(t => t.row === r && t.col === c);
+      if (isTarget) {
+        const from = rcToSquare(selected.row, selected.col);
+        const to = rcToSquare(r, c);
+        const candidates = getMoveCandidates(gameState, from, to);
+        if (candidates.length > 1) { setPendingPromotion({ candidates }); return; }
+        doMove(candidates[0]);
+        return;
+      }
+      if (piece && pieceColor(piece) === gameState.turn) {
+        setSelected({ row: r, col: c });
+        setLegalTargets(getLegalMoves(gameState, r, c).map(m => m.to));
+        return;
+      }
+      setSelected(null); setLegalTargets([]);
+      return;
+    }
+    if (piece && pieceColor(piece) === gameState.turn) {
+      setSelected({ row: r, col: c });
+      setLegalTargets(getLegalMoves(gameState, r, c).map(m => m.to));
+    }
+  }
+
+  function handlePromotion(letter) {
+    const mv = pendingPromotion.candidates.find(c => c.promotion === letter);
+    setPendingPromotion(null);
+    if (mv) doMove(mv);
+  }
+
+  function copyCode() {
+    navigator.clipboard?.writeText(roomCode).then(() => { setCopiedCode(true); setTimeout(() => setCopiedCode(false), 1800); });
+  }
+
+  // ---- LOBBY ----
+  if (phase === 'lobby') {
+    return (
+      <div className="anim-slide-up" style={{ padding: '0 1rem' }}>
+        <button type="button" className="lp-close" style={{ marginBottom: '0.7rem' }} onClick={onBack}>
+          <ArrowLeft size={18} /> <span style={{ fontWeight: 700, marginLeft: '0.4rem' }}>Kembali</span>
+        </button>
+
+        <div className="card center-col" style={{ marginBottom: '1rem' }}>
+          <User size={28} style={{ color: '#5BC8E0', marginBottom: '0.4rem' }} />
+          <h2 className="section-title">Lawan Player</h2>
+          <p className="muted" style={{ fontSize: '0.8rem', margin: '0.2rem 0 0', textAlign: 'center' }}>
+            Halo, <b style={{ color: 'var(--text-primary)' }}>{user?.displayName?.split(' ')[0]}</b>! Buat room baru atau gabung dengan kode teman.
+          </p>
+        </div>
+
+        <p className="muted" style={{ fontSize: '0.78rem', fontWeight: 700, margin: '0 0 0.45rem' }}>BUAT ROOM BARU</p>
+        <div className="choice-grid" style={{ marginBottom: '1.1rem' }}>
+          <button type="button" className="choice-btn" onClick={() => handleCreate('w')}>
+            <div className="choice-btn-title"><span style={{ fontSize: '1.3rem' }}>♔</span> Main Putih</div>
+            <div className="choice-btn-desc">Kamu jalan duluan</div>
+          </button>
+          <button type="button" className="choice-btn" onClick={() => handleCreate('b')}>
+            <div className="choice-btn-title"><span style={{ fontSize: '1.3rem' }}>♚</span> Main Hitam</div>
+            <div className="choice-btn-desc">Lawan jalan duluan</div>
+          </button>
+        </div>
+
+        <p className="muted" style={{ fontSize: '0.78rem', fontWeight: 700, margin: '0 0 0.45rem' }}>GABUNG ROOM</p>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <input
+            className="chat-input"
+            style={{ flex: 1, textTransform: 'uppercase', letterSpacing: '0.12em', fontFamily: 'JetBrains Mono,monospace', fontWeight: 700 }}
+            placeholder="Masukkan kode (misal: KUDA42)"
+            value={joinInput}
+            maxLength={6}
+            onChange={e => setJoinInput(e.target.value.toUpperCase())}
+            onKeyDown={e => e.key === 'Enter' && handleJoin()}
+          />
+          <button type="button" className="btn-primary" style={{ padding: '0.7rem 1rem', flexShrink: 0 }} onClick={handleJoin}>
+            Gabung
+          </button>
+        </div>
+
+        {error && (
+          <div className="feedback-banner feedback-error anim-pop" style={{ marginTop: '0.7rem' }}>
+            <Info size={16} style={{ flexShrink: 0 }} /> <span>{error}</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ---- CREATING / JOINING (loading) ----
+  if (phase === 'creating' || phase === 'joining') {
+    return (
+      <div className="center-col" style={{ padding: '5rem 1rem', gap: '1rem' }}>
+        <Loader2 size={36} className="spin" style={{ color: 'var(--accent-gold)' }} />
+        <p style={{ margin: 0, fontWeight: 700 }}>{phase === 'creating' ? 'Membuat room...' : 'Bergabung ke room...'}</p>
+      </div>
+    );
+  }
+
+  // ---- WAITING (host menunggu guest) ----
+  if (phase === 'waiting') {
+    return (
+      <div className="anim-slide-up" style={{ padding: '0 1rem' }}>
+        <div className="card center-col" style={{ marginBottom: '0.8rem' }}>
+          <p style={{ margin: 0, fontWeight: 700, fontSize: '1rem' }}>Kamu Host — Bagikan Kode Ini!</p>
+          <div className="room-code" onClick={copyCode} style={{ cursor: 'pointer' }} title="Ketuk untuk menyalin">
+            {roomCode}
+          </div>
+          <button type="button" className="btn-ghost" style={{ fontSize: '0.8rem', padding: '0.45rem 1rem' }} onClick={copyCode}>
+            {copiedCode ? <><Check size={13} style={{ display: 'inline', verticalAlign: '-2px', marginRight: '0.3rem', color: 'var(--success)' }} />Tersalin!</> : 'Salin Kode'}
+          </button>
+          <p className="muted" style={{ fontSize: '0.78rem', margin: '0.6rem 0 0', textAlign: 'center' }}>
+            Minta temanmu buka CaturKu → Lawan Player → masukkan kode di atas
+          </p>
+        </div>
+        <div className="center-col" style={{ gap: '0.5rem', padding: '0.5rem 0' }}>
+          <div className="dot-blink"><span /><span /><span /></div>
+          <p className="muted" style={{ margin: 0, fontSize: '0.82rem' }}>Menunggu teman bergabung...</p>
+        </div>
+        <button type="button" className="btn-ghost" style={{ width: '100%', marginTop: '1rem' }} onClick={async () => { await abandonRoom(roomCode); cleanup(); }}>
+          Batalkan Room
+        </button>
+      </div>
+    );
+  }
+
+  // ---- PLAYING ----
+  if (phase === 'playing' && gameState) {
+    const myTurn = gameState.turn === myColor;
+    const orientation = myColor === 'w' ? 'white' : 'black';
+    const checkSquare = isInCheck(gameState, gameState.turn) ? findKing(gameState.board, gameState.turn) : null;
+    const meInfo = meIsHost ? roomData?.host : roomData?.guest;
+    const oppInfo = meIsHost ? roomData?.guest : roomData?.host;
+    const oppColor = myColor === 'w' ? 'b' : 'w';
+
+    return (
+      <div className="anim-slide-up" style={{ padding: '0 1rem' }}>
+        <div className="game-status-bar">
+          <span className="pill pill-muted"><User size={13} /> VS Player{roomCode ? ` · ${roomCode}` : ''}</span>
+          <button type="button" className="icon-btn" onClick={copyCode} title="Salin kode room">
+            {copiedCode ? <Check size={14} style={{ color: 'var(--success)' }} /> : <RefreshCw size={14} />}
+          </button>
+        </div>
+
+        {/* Opponent bar (top) */}
+        <PlayerBar info={oppInfo} color={oppColor} isMyTurn={!myTurn} inCheck={!myTurn && !!checkSquare} />
+
+        <div style={{ position: 'relative', margin: '0.45rem 0' }}>
+          <ChessBoard
+            board={gameState.board}
+            onSquareClick={handleSquareClick}
+            selected={selected}
+            legalTargets={legalTargets}
+            lastMove={null}
+            checkSquare={checkSquare}
+            orientation={orientation}
+            disabled={!myTurn}
+            showCoords
+            themeId={boardTheme}
+          />
+          {pendingPromotion && <PromotionPicker color={myColor} onChoose={handlePromotion} />}
+        </div>
+
+        {/* My bar (bottom) */}
+        <PlayerBar info={meInfo} color={myColor} isMyTurn={myTurn} inCheck={myTurn && !!checkSquare} />
+
+        <div style={{ marginTop: '0.7rem', display: 'flex', gap: '0.5rem' }}>
+          <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={async () => { await abandonRoom(roomCode); cleanup(); onBack(); }}>
+            Menyerah & Keluar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ---- ENDED ----
+  if (phase === 'ended') {
+    const iWon = result === myColor;
+    const isDr = result === 'draw';
+    const abandoned = result === 'abandoned';
+    return (
+      <div className="anim-slide-up center-col" style={{ padding: '3rem 1rem', gap: '0.8rem' }}>
+        <Trophy size={52} style={{ color: iWon ? 'var(--accent-gold)' : 'var(--text-muted)' }} />
+        <h2 className="step-title" style={{ margin: 0 }}>
+          {abandoned ? 'Lawan Keluar' : iWon ? 'Kamu Menang!' : isDr ? 'Seri!' : 'Kamu Kalah'}
+        </h2>
+        <p className="muted" style={{ margin: 0 }}>
+          {abandoned ? 'Partai diakhiri karena lawan meninggalkan permainan.'
+            : iWon ? 'Selamat! Kamu berhasil mengalahkan lawan.' : isDr ? 'Partai berakhir imbang.' : 'Terus berlatih ya!'}
+        </p>
+        <button type="button" className="btn-primary" style={{ marginTop: '1rem', minWidth: '12rem' }} onClick={() => { cleanup(); }}>
+          Kembali ke Lobby
+        </button>
+        <button type="button" className="btn-ghost" style={{ minWidth: '12rem' }} onClick={() => { cleanup(); onBack(); }}>
+          Kembali ke Menu
+        </button>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 // ============================================================================
@@ -4203,10 +4698,34 @@ export default function App() {
   const [guruPending, setGuruPending] = useState(null);
   const [activePuzzleConfig, setActivePuzzleConfig] = useState(null);
   const [achievementQueue, setAchievementQueue] = useState([]);
+  const [user, setUser] = useState(null);
+  const [mainMode, setMainMode] = useState(null); // null | 'ai' | 'multiplayer'
 
   function handleUpdatePrefs(changes) {
     setProgress((p) => ({ ...p, ...changes }));
   }
+
+  // Firebase auth listener
+  useEffect(() => {
+    const unsub = onAuthChange(async (fbUser) => {
+      setUser(fbUser);
+      if (fbUser && progress) {
+        // Load cloud progress when user logs in
+        const cloud = await loadProgressCloud(fbUser.uid);
+        if (cloud && (cloud.xp || 0) >= (progress.xp || 0)) {
+          setProgress((p) => ({ ...DEFAULT_PROGRESS, ...p, ...cloud }));
+        }
+      }
+    });
+    return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Sync progress to Firestore whenever it changes (if logged in)
+  useEffect(() => {
+    if (!progress || !user) return;
+    saveProgressCloud(user.uid, progress).catch(() => {});
+  }, [progress, user]);
 
   // Load progress + update streak
   useEffect(() => {
@@ -4335,12 +4854,25 @@ export default function App() {
   const activeLesson = activeLessonId ? LESSONS.find((l) => l.id === activeLessonId) : null;
   const prefsValue = { boardTheme: progress.boardTheme || 'classic', soundEnabled: progress.soundEnabled !== false };
 
+  async function handleLogin() {
+    try { await loginGoogle(); } catch (e) { alert(e.message); }
+  }
+  async function handleLogout() {
+    await logoutUser();
+    setUser(null);
+    setMainMode(null);
+  }
+  function handleTabChange(tab) {
+    setActiveTab(tab);
+    if (tab !== 'main') setMainMode(null);
+  }
+
   return (
     <PreferencesContext.Provider value={prefsValue}>
       <div className="ca-root">
         <GlobalStyles />
         <GlobalStyles2 />
-        <TopBar progress={progress} />
+        <TopBar progress={progress} user={user} onLogin={handleLogin} onLogout={handleLogout} />
 
         {achievementQueue.length > 0 && (
           <AchievementToast
@@ -4361,18 +4893,25 @@ export default function App() {
             {activeTab === 'belajar' && <LearnTab progress={progress} onOpenLesson={setActiveLessonId} />}
             {activeTab === 'taktik' && <TacticsTab progress={progress} onOpenPuzzleSet={setActivePuzzleConfig} />}
             {activeTab === 'main' && (
-              <PlayTab playState={playState} setPlayState={setPlayState} onGameEnd={handleGameEnd} onAskGuru={handleAskGuru} />
+              mainMode === 'ai'
+                ? <PlayTab playState={playState} setPlayState={setPlayState} onGameEnd={handleGameEnd} onAskGuru={handleAskGuru} />
+                : mainMode === 'multiplayer' && user
+                  ? <MultiplayerTab user={user} onBack={() => setMainMode(null)} />
+                  : <MainChoiceScreen
+                      user={user}
+                      onChooseAI={() => setMainMode('ai')}
+                      onChooseMultiplayer={() => user ? setMainMode('multiplayer') : handleLogin()}
+                    />
             )}
             {activeTab === 'profil' && <ProfileTab progress={progress} onResetProgress={handleResetProgress} onUpdatePrefs={handleUpdatePrefs} />}
           </div>
         )}
 
-        <BottomNav active={activeTab} onChange={setActiveTab} />
+        <BottomNav active={activeTab} onChange={handleTabChange} />
 
         {activeLesson && (
           <LessonPlayer lesson={activeLesson} onComplete={handleLessonComplete} onClose={() => setActiveLessonId(null)} />
         )}
-
         {activePuzzleConfig && (
           <PuzzlePlayer
             config={activePuzzleConfig}
